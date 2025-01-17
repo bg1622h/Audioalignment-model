@@ -80,13 +80,13 @@ class AudioDataset(Dataset):
                 sr = self.new_sr
         midi_data = midi_processing(pretty_midi.PrettyMIDI(os.path.join(self.midi_dir, self.midi_files[index])))
         self.input_size = audio.size()
-        audio_segments = [audio[:, i:i + (sr + self.hop_size - 1) // self.hop_size] for i in range(0,audio.size(1), (sr + self.hop_size - 1) // self.hop_size)]
+        audio_segments = [audio[:, i:i + 2 * (sr + self.hop_size - 1) // self.hop_size] for i in range(0,audio.size(1), 2 * (sr + self.hop_size - 1) // self.hop_size)]
         if (audio_segments[-1].size(1) != audio_segments[0].size(1)):
             audio_segments[-1] = torch.cat((audio_segments[-1],torch.zeros(audio_segments[0].size(0), audio_segments[0].size(1) - audio_segments[-1].size(1))), dim = 1)
         segment = []
         for i, audio_segment in enumerate(audio_segments):
             notes = [data[0] for data in midi_data
-                     if data[1] >= i and data[2] < i + 1]
+                     if data[1] >= 2 * i and data[2] < 2 * (i + 1)]
             segment.append({
                 'audio': audio_segment,
                 'notes': notes,

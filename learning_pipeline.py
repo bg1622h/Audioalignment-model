@@ -15,6 +15,10 @@ from sklearn.metrics.pairwise import cosine_similarity
 PITCHES = 128
 SAMPLE_RATE = 44100
 BLANK_CHAR = 0
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
+
 class Error(Exception):
     pass
 
@@ -96,20 +100,20 @@ def collate_fn(batch):
     notes = [torch.tensor(item['notes'], dtype=torch.int32) for segment in batch for item in segment]
     size = [item['size'] for segment in batch for item in segment]
     sr = [item['sr'] for segment in batch for item in segment]
-    audio = torch.stack(audio)
-    notes = nn.utils.rnn.pad_sequence(notes, batch_first=True, padding_value=0)
+    audio = torch.stack(audio).to(device)
+    notes = nn.utils.rnn.pad_sequence(notes, batch_first=True, padding_value=0).to(device)
     return {
         'audio': audio,
         'notes': notes,
-        'size': torch.tensor(size, dtype=torch.int32),
-        'sr': torch.tensor(sr, dtype=torch.int32)
+        'size': torch.tensor(size, dtype=torch.int32, device=device),
+        'sr': torch.tensor(sr, dtype=torch.int32, device=device)
     }
 
 class AudioAligmentModel(nn.Module):
     def __init__(self,output_dim,input_dim, num_transformer_layers = 2, d_model = 256, nhead = 2):
         super(AudioAligmentModel,self).__init__()
         self.conv1 = nn.Conv1d(input_dim, 64, kernel_size=3, stride=2)
-        self.conv2 = nn.Conv1d(64, 128, kernel_size=3, stride=2)
+        self.conv2 = nn.Conv1d(64, 256, kernel_size=3, stride=2)
         transformer_layer = nn.TransformerEncoderLayer (
             d_model = d_model,
             nhead=nhead,
@@ -177,7 +181,8 @@ def data_example(loader, cnt, nfft, hopSize, sr, title, series, logger):
         cur_cnt+=1
 
 def train_model(model, train_dataloader, val_dataloader, num_epochs, initial_lr, logger, checkpoint_path = None, save_checkpoint_path = None, save_step = None):
-    criterion = nn.CTCLoss(blank = 0)
+    model = model.to(device)
+    criterion = nn.CTCLoss(blank = 0).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr = initial_lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=optimizer, T_max=(num_epochs) * len(train_dataloader))
     iteration = -1
@@ -193,7 +198,7 @@ def train_model(model, train_dataloader, val_dataloader, num_epochs, initial_lr,
             audio, target, target_size = batch['audio'], batch['notes'], batch['size']
             output = model(audio)
             output = output.log_softmax(2)
-            output_size = torch.tensor([out.size(0) for out in output], dtype = torch.int32)
+            output_size = torch.tensor([out.size(0) for out in output], dtype = torch.int32, device=device)
             loss = criterion(output.permute(1,0,2), target, output_size, target_size)
             optimizer.zero_grad()
             loss.backward()
@@ -209,7 +214,7 @@ def train_model(model, train_dataloader, val_dataloader, num_epochs, initial_lr,
                 audio, target, target_size = batch['audio'], batch['notes'], batch['size']
                 output = model(audio)
                 output = output.log_softmax(2)
-                output_size = torch.tensor([out.size(0) for out in output], dtype=torch.int32)
+                output_size = torch.tensor([out.size(0) for out in output], dtype=torch.int32, device=device)
                 loss = criterion(output.permute(1, 0, 2), target, output_size, target_size)
                 val_loss += loss.item()
                 val_iterations += 1

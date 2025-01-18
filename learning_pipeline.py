@@ -109,11 +109,31 @@ def collate_fn(batch):
         'sr': torch.tensor(sr, dtype=torch.int32, device=device)
     }
 
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=5000):
+        super(PositionalEncoding, self).__init__()
+        
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len).float().unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * -(np.log(10000.0) / d_model))
+        
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        
+        pe = pe.unsqueeze(0)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        seq_len = x.size(1)
+        return x + self.pe[:, :seq_len]
+
+
 class AudioAligmentModel(nn.Module):
     def __init__(self,output_dim,input_dim, num_transformer_layers = 2, d_model = 256, nhead = 2):
         super(AudioAligmentModel,self).__init__()
         self.conv1 = nn.Conv1d(input_dim, 64, kernel_size=3, stride=2)
         self.conv2 = nn.Conv1d(64, 256, kernel_size=3, stride=2)
+        self.positional_encoding = PositionalEncoding(d_model)
         transformer_layer = nn.TransformerEncoderLayer (
             d_model = d_model,
             nhead=nhead,
@@ -126,7 +146,9 @@ class AudioAligmentModel(nn.Module):
     def forward(self, x):
         x = self.conv1(x)
         x = self.conv2(x)
-        x = self.transformer(x.permute(0,2,1))
+        x = x.permute(0,2,1)
+        x = self.positional_encoding(x)
+        x = self.transformer(x)
         x = self.fc(x)
         return x
 def save_checkpoint(model, optimizer, scheduler, epoch, iteration, path):

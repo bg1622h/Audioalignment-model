@@ -38,15 +38,15 @@ def testing_aligment(model, dataloader):
             audio, target, target_size = batch['audio'], batch['notes'], batch['size']
             output = model(audio)
             output = output.log_softmax(2)
-            output_size = torch.tensor([out.size(0) for out in output], dtype=torch.int32)
+            output_size = torch.tensor([out.size(0) for out in output], dtype=torch.int32, device=device)
             loss = criterion(output.permute(1, 0, 2), target, output_size, target_size)
             print(loss.item())
-            result = [beam_search_decoder(prob) for prob in output]
+            result = [beam_search_decoder(prob.cpu()) for prob in output]
             print(result)
 
 if __name__ == "__main__":
     args = parse_args()
-
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     transform = torchaudio.transforms.Spectrogram(n_fft = args.nfft)
 
     dataset = AudioDataset(audio_dir=args.audio_dir, midi_dir = args.midi_dir, transform=transform, hop_size=args.nfft // 2)
@@ -72,7 +72,7 @@ if __name__ == "__main__":
         collate_fn=collate_fn,
     )
 
-    model = AudioAligmentModel(input_dim = args.nfft // 2 + 1, output_dim = 129)
+    model = AudioAligmentModel(input_dim = args.nfft // 2 + 1, output_dim = 129).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr = args.lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=optimizer, T_max=args.num_epochs)
     load_checkpoint(model, optimizer, scheduler, "./checkpoints/model50.pth")

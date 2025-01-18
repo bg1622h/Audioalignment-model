@@ -192,7 +192,7 @@ class ConformerBlock(nn.Module):
         return self.norm(x)
 
 class AudioAligmentModel(nn.Module):
-    def __init__(self, input_dim, num_classes, num_blocks = 16, d_model = 256, nhead = 4, ffn_expansion_factor = 4, 
+    def __init__(self, input_dim, num_classes, num_blocks = 4, d_model = 256, nhead = 4, ffn_expansion_factor = 4, 
                  kernel_size = 31, dropout = 0.1):
         super(AudioAligmentModel, self).__init__()
         self.conv_layer = nn.Conv1d(input_dim, d_model, kernel_size=3, stride=1, padding=1)

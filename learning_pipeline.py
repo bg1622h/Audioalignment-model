@@ -61,6 +61,8 @@ class AudioDataset(Dataset):
         assert len(self.audio_files) == len(self.midi_files), f"Audio files count: {len(self.audio_files)} but Midi files count: {len(self.midi_files)}"
         self.audio_files.sort()
         self.midi_files.sort()
+        self.audio_files = self.audio_files[:4]
+        self.midi_files = self.midi_files[:4]
         for audio_file, midi_file in zip(self.audio_files, self.midi_files):
             name_audio = os.path.splitext(audio_file)[0]
             name_midi = os.path.splitext(midi_file)[0]
@@ -127,7 +129,94 @@ class PositionalEncoding(nn.Module):
         seq_len = x.size(1)
         return x + self.pe[:, :seq_len]
 
+class Swish(nn.Module):
+    def forward(self, x):
+        return x * torch.sigmoid(x)
 
+class FeedForwardModule(nn.Module):
+    def __init__(self, d_model, expansion_factor = 4.0, dropout = 0.2):
+        super(FeedForwardModule, self).__init__()
+        self.fnn = nn.Sequential(
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, d_model * expansion_factor),
+            Swish(),
+            nn.Dropout(dropout),
+            nn.Linear(d_model * expansion_factor, d_model),
+            nn.Dropout(dropout)
+        )
+    def forward(self, x):
+        return x + 0.5 * self.fnn(x)
+
+class MutliHead_SelfAttention(nn.Module):
+    def __init__(self, d_model, nhead, dropout = 0.1):
+        super(MutliHead_SelfAttention,self).__init__()
+        self.attention = nn.MultiheadAttention(embed_dim=d_model, num_heads=nhead, dropout=dropout, batch_first=True)
+
+    def forward(self,x):
+        input = x
+        x,_ = self.attention(x,x,x)
+        return input + x
+
+class ConvolutionModule(nn.Module):
+    def __init__(self, d_model, kernel_size = 31, dropout = 0.1): #10 - fixed value
+        super(ConvolutionModule,self).__init__()
+        self.conv = nn.Sequential(
+            nn.LayerNorm(d_model),
+            nn.Conv1d(d_model, 2 * d_model, kernel_size=1, groups = d_model),
+            nn.GLU(dim = 1),
+            nn.Conv1d(d_model, d_model, kernel_size=kernel_size, padding=(kernel_size - 1) // 2, groups=d_model),
+            nn.BatchNorm1d(d_model),
+            Swish(),
+            nn.Conv1d(d_model, d_model, kernel_size=1, groups=d_model),
+            nn.Dropout(dropout)
+        )
+    def forward(self, x):
+        input = x
+        x = self.conv(x.permute(0,2,1))
+        return x + input
+    
+class ConformerBlock(nn.Module):
+    def __init__(self, d_model, nhead, ffn_expansion_factor = 4, kernel_size = 31, dropout = 0.1):
+        super(ConformerBlock, self).__init__()
+        self.fnn1 = FeedForwardModule(d_model, ffn_expansion_factor, dropout)
+        self.self_attention = MutliHead_SelfAttention(d_model, nhead, dropout)
+        self.conv = ConvolutionModule(d_model, kernel_size, dropout)
+        self.fnn2 = FeedForwardModule(d_model, ffn_expansion_factor, dropout)
+        self.norm = nn.LayerNorm(d_model)
+
+    def forward(self, x):
+        x = self.fnn1(x)
+        x = self.self_attention(x)
+        x = self.conv(x)
+        x = self.fnn2(x)
+        return self.norm(x)
+
+class AudioAligmentModel(nn.Module):
+    def __init__(self, input_dim, num_classes, num_blocks = 16, d_model = 256, nhead = 4, ffn_expansion_factor = 4, 
+                 kernel_size = 31, dropout = 0.1):
+        super(AudioAligmentModel, self).__init__()
+        self.conv_layer = nn.Conv1d(input_dim, d_model, kernel_size=3, stride=1, padding=1)
+        self.linear = nn.Linear(d_model, d_model)
+        self.dropout = nn.Dropout(dropout)
+        self.positional_encoding = PositionalEncoding(d_model)
+        self.conformer = nn.ModuleList([
+            ConformerBlock(d_model, nhead,ffn_expansion_factor, kernel_size, dropout)
+            for i in range(num_blocks)
+        ])
+        self.output = nn.Linear(d_model, num_classes)
+
+    def forward(self, x):
+        x = self.conv_layer(x)
+        x = x.permute(0,2,1)
+        x = self.linear(x)
+        x = self.dropout(x)
+        x = self.positional_encoding(x)
+        for block in self.conformer:
+            x = block(x)
+
+        return self.output(x)
+
+"""
 class AudioAligmentModel(nn.Module):
     def __init__(self,output_dim,input_dim, num_transformer_layers = 2, d_model = 256, nhead = 2):
         super(AudioAligmentModel,self).__init__()
@@ -151,6 +240,7 @@ class AudioAligmentModel(nn.Module):
         x = self.transformer(x)
         x = self.fc(x)
         return x
+"""
 def save_checkpoint(model, optimizer, scheduler, epoch, iteration, path):
     torch.save({
         'epoch': epoch,
@@ -274,7 +364,7 @@ if __name__ == "__main__":
         shuffle=True
     )
 
-    model = AudioAligmentModel(input_dim = args.nfft // 2 + 1, output_dim = 129)
+    model = AudioAligmentModel(input_dim = args.nfft // 2 + 1, num_classes = 129)
 
     logger = Logger.current_logger()
 

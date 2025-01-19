@@ -26,9 +26,7 @@ def beam_search_decoder(probs, beam_width=3):
                 new_score = score + probs[t, cur_char].item()
                 all_candidates.append(((new_seq, cur_char), new_score))
         sequences = sorted(all_candidates, key=lambda x: -x[1])[:beam_width]
-    if sequences[0][0][0] != []:
-        print(sequences)
-    return sequences[0]
+    return sequences
 
 def testing_aligment(model, dataloader):
     model.eval()

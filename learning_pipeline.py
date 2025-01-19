@@ -50,12 +50,13 @@ class AudioDataset(Dataset):
     """
     Dataset for audio and MIDI processing split into fixed 2-second segments.
     """
-    def __init__(self, audio_dir, midi_dir, hop_size, transform=None, new_sr=None):
+    def __init__(self, audio_dir, midi_dir, hop_size, frame_size = 2, transform=None, new_sr=None):
         self.audio_dir = audio_dir
         self.midi_dir = midi_dir
         self.new_sr = new_sr
         self.hop_size = hop_size
         self.transform = transform
+        self.frame_size = frame_size
         self.audio_files = [f for f in os.listdir(audio_dir) if f.endswith((".wav", ".mp3"))]
         self.midi_files = [f for f in os.listdir(midi_dir) if f.endswith((".midi"))]
         
@@ -89,7 +90,7 @@ class AudioDataset(Dataset):
 
         midi_data = midi_processing(pretty_midi.PrettyMIDI(midi_path))
 
-        segment_length = 2 * (sr + self.hop_size - 1) // (self.hop_size)
+        segment_length = self.frame_size * (sr + self.hop_size - 1) // (self.hop_size)
         total_segments = (audio.size(1) + segment_length - 1) // segment_length
         segments = []
 
@@ -99,7 +100,7 @@ class AudioDataset(Dataset):
             audio_segment = audio[:,start:end]
             if (audio_segment.size(1) < segment_length):
                 audio_segment = torch.cat((audio_segment,torch.zeros(audio_segment.size(0), segment_length - audio_segment.size(1))), dim = 1)
-            notes = [data[0] for data in midi_data if i <= data[1] < (i + 1)]
+            notes = [data[0] for data in midi_data if  self.frame_size * i <= data[1] < self.frame_size * (i + 1)]
             segments.append({
                 'audio': audio_segment,
                 'notes': notes,

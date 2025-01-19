@@ -17,4 +17,5 @@ def parse_args():
     parser.add_argument("--train_part", type = float, default=0.8)
     parser.add_argument("--dataset_size", type = int, default=50)
     parser.add_argument("--path_save_model",type = str, default="./checkpoints/model150.pth")
+    parser.add_argument("--sr", type = int, default = 22050)
     return parser.parse_args()

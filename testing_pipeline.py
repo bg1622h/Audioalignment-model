@@ -72,9 +72,14 @@ if __name__ == "__main__":
         collate_fn=collate_fn,
     )
 
-    model = AudioAligmentModel(input_dim = args.nfft // 2 + 1, output_dim = 129).to(device)
+    model = AudioAligmentModel(input_dim = args.nfft // 2 + 1, num_classes = 129).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr = args.lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=optimizer, T_max=args.num_epochs)
     load_checkpoint(model, optimizer, scheduler, "./checkpoints/model50.pth")
 
     testing_aligment(model, val_dataloader)
+
+
+
+
+    

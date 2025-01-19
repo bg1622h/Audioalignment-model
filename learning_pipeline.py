@@ -65,7 +65,7 @@ class AudioDataset(Dataset):
         
         self.audio_files.sort()
         self.midi_files.sort()
-
+        
         for audio_file, midi_file in zip(self.audio_files, self.midi_files):
             name_audio = os.path.splitext(audio_file)[0]
             name_midi = os.path.splitext(midi_file)[0]
@@ -90,14 +90,14 @@ class AudioDataset(Dataset):
         midi_data = midi_processing(pretty_midi.PrettyMIDI(midi_path))
 
         segment_length = 2 * (sr + self.hop_size - 1) // (self.hop_size)
-        total_segments = audio.size(1) // segment_length
+        total_segments = (audio.size(1) + segment_length - 1) // segment_length
         segments = []
 
         for i in range(total_segments):
             start = i * segment_length
-            end = start + segment_length
+            end = (i + 1) * segment_length
             audio_segment = audio[:,start:end]
-            notes = [data[0] for data in midi_data if start / sr <= data[1] < end / sr]
+            notes = [data[0] for data in midi_data if i <= data[1] < (i + 1)]
             segments.append({
                 'audio': audio_segment,
                 'notes': notes,

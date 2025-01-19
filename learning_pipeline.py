@@ -48,9 +48,9 @@ def create_midi_template():
 #transform - resampling + spectrogram
 class AudioDataset(Dataset):
     """
-    Load files for every batch from disk to save RAM
+    Dataset for audio and MIDI processing split into fixed 2-second segments.
     """
-    def __init__(self,audio_dir,midi_dir,hop_size, transform = None, new_sr = None):
+    def __init__(self, audio_dir, midi_dir, hop_size, transform=None, new_sr=None):
         self.audio_dir = audio_dir
         self.midi_dir = midi_dir
         self.new_sr = new_sr
@@ -58,57 +58,75 @@ class AudioDataset(Dataset):
         self.transform = transform
         self.audio_files = [f for f in os.listdir(audio_dir) if f.endswith((".wav", ".mp3"))]
         self.midi_files = [f for f in os.listdir(midi_dir) if f.endswith((".midi"))]
-        assert len(self.audio_files) == len(self.midi_files), f"Audio files count: {len(self.audio_files)} but Midi files count: {len(self.midi_files)}"
+        
+        assert len(self.audio_files) == len(self.midi_files), (
+            f"Audio files count: {len(self.audio_files)} but MIDI files count: {len(self.midi_files)}"
+        )
+        
         self.audio_files.sort()
         self.midi_files.sort()
+
         self.audio_files = self.audio_files[:4]
         self.midi_files = self.midi_files[:4]
+
         for audio_file, midi_file in zip(self.audio_files, self.midi_files):
             name_audio = os.path.splitext(audio_file)[0]
             name_midi = os.path.splitext(midi_file)[0]
-            if name_audio < name_midi:
-                raise Error(f"{name_audio}.midi file not found")
-            if name_audio > name_midi:
-                raise Error(f"{name_midi}.* audio file not found")
-            
-    def __len__(self):
-        return len(self.audio_files)     
-    def __getitem__(self, index):
-        audio, sr = torchaudio.load(os.path.join(self.audio_dir, self.audio_files[index]))
-        audio = audio.mean(dim = 0)
+            if name_audio != name_midi:
+                raise ValueError(f"Mismatch: {name_audio}.midi and {name_midi}.* audio file")
+
+        self.segments = []
+        for audio_file, midi_file in zip(self.audio_files, self.midi_files):
+            audio_path = os.path.join(self.audio_dir, audio_file)
+            midi_path = os.path.join(self.midi_dir, midi_file)
+            self.segments.extend(self._generate_segments(audio_path, midi_path))
+
+    def _generate_segments(self, audio_path, midi_path):
+        audio, sr = torchaudio.load(audio_path)
+        audio = audio.mean(dim=0)
+
         if self.transform:
             audio = self.transform(audio)
             if self.new_sr:
                 sr = self.new_sr
-        midi_data = midi_processing(pretty_midi.PrettyMIDI(os.path.join(self.midi_dir, self.midi_files[index])))
-        self.input_size = audio.size()
-        audio_segments = [audio[:, i:i + 2 * (sr + self.hop_size - 1) // self.hop_size] for i in range(0,audio.size(1), 2 * (sr + self.hop_size - 1) // self.hop_size)]
-        if (audio_segments[-1].size(1) != audio_segments[0].size(1)):
-            audio_segments[-1] = torch.cat((audio_segments[-1],torch.zeros(audio_segments[0].size(0), audio_segments[0].size(1) - audio_segments[-1].size(1))), dim = 1)
-        segment = []
-        for i, audio_segment in enumerate(audio_segments):
-            notes = [data[0] for data in midi_data
-                     if data[1] >= 2 * i and data[2] < 2 * (i + 1)]
-            segment.append({
+
+        midi_data = midi_processing(pretty_midi.PrettyMIDI(midi_path))
+
+        segment_length = 2 * (sr + self.hop_size - 1) // (self.hop_size)
+        total_segments = audio.size(1) // segment_length
+        segments = []
+
+        for i in range(total_segments):
+            start = i * segment_length
+            end = start + segment_length
+            audio_segment = audio[:,start:end]
+            notes = [data[0] for data in midi_data if start / sr <= data[1] < end / sr]
+            segments.append({
                 'audio': audio_segment,
                 'notes': notes,
                 'size': len(notes),
-                'sr': sr 
+                'sr': sr,
             })
-        return segment
+        return segments
+
+    def __len__(self):
+        return len(self.segments)
+
+    def __getitem__(self, index):
+        return self.segments[index]
 
 def collate_fn(batch):
-    audio = [item['audio'] for segment in batch for item in segment]
-    notes = [torch.tensor(item['notes'], dtype=torch.int32) for segment in batch for item in segment]
-    size = [item['size'] for segment in batch for item in segment]
-    sr = [item['sr'] for segment in batch for item in segment]
+    audio = [item['audio'] for item in batch]
+    notes = [torch.tensor(item['notes'], dtype=torch.int32) for item in batch]
+    size = [item['size'] for item in batch]
+    sr = [item['sr'] for item in batch]
     audio = torch.stack(audio).to(device)
     notes = nn.utils.rnn.pad_sequence(notes, batch_first=True, padding_value=0).to(device)
     return {
         'audio': audio,
         'notes': notes,
         'size': torch.tensor(size, dtype=torch.int32, device=device),
-        'sr': torch.tensor(sr, dtype=torch.int32, device=device)
+        'sr': torch.tensor(sr, dtype=torch.int32, device=device),
     }
 
 class PositionalEncoding(nn.Module):
@@ -161,7 +179,7 @@ class ConvolutionModule(nn.Module):
     def __init__(self, d_model, kernel_size = 31, dropout = 0.1): #10 - fixed value
         super(ConvolutionModule,self).__init__()
         self.conv = nn.Sequential(
-            nn.LayerNorm(d_model),
+            #nn.LayerNorm(d_model),
             nn.Conv1d(d_model, 2 * d_model, kernel_size=1, groups = d_model),
             nn.GLU(dim = 1),
             nn.Conv1d(d_model, d_model, kernel_size=kernel_size, padding=(kernel_size - 1) // 2, groups=d_model),
@@ -172,7 +190,9 @@ class ConvolutionModule(nn.Module):
         )
     def forward(self, x):
         input = x
+        #print(x.size())
         x = self.conv(x.permute(0,2,1))
+        x = x.permute(0,2,1)
         return x + input
     
 class ConformerBlock(nn.Module):
@@ -192,9 +212,10 @@ class ConformerBlock(nn.Module):
         return self.norm(x)
 
 class AudioAligmentModel(nn.Module):
-    def __init__(self, input_dim, num_classes, num_blocks = 1, d_model = 256, nhead = 2, ffn_expansion_factor = 4, 
+    def __init__(self, input_dim, num_classes, num_blocks = 2, d_model = 256, nhead = 2, ffn_expansion_factor = 4, 
                  kernel_size = 31, dropout = 0.1):
         super(AudioAligmentModel, self).__init__()
+        self.d_model = d_model
         self.conv_layer = nn.Conv1d(input_dim, d_model, kernel_size=3, stride=1, padding=1)
         self.linear = nn.Linear(d_model, d_model)
         self.dropout = nn.Dropout(dropout)
@@ -207,10 +228,13 @@ class AudioAligmentModel(nn.Module):
 
     def forward(self, x):
         x = self.conv_layer(x)
+        #print(x.size())
+        x = self.linear(x.permute(0,2,1))
         x = x.permute(0,2,1)
-        x = self.linear(x)
+        #print(x.size())
         x = self.dropout(x)
-        x = self.positional_encoding(x)
+        x = self.positional_encoding(x.permute(0,2,1))
+        #print(x.size())
         for block in self.conformer:
             x = block(x)
 
@@ -308,7 +332,9 @@ def train_model(model, train_dataloader, val_dataloader, num_epochs, initial_lr,
             if save_checkpoint_path and iteration % save_step == 0:
                 save_checkpoint(model, optimizer, scheduler, epoch, iteration, save_checkpoint_path+f"model{iteration}.pth")
             audio, target, target_size = batch['audio'], batch['notes'], batch['size']
+            #print(audio.size())
             output = model(audio)
+            #print(output.size())
             output = output.log_softmax(2)
             output_size = torch.tensor([out.size(0) for out in output], dtype = torch.int32, device=device)
             loss = criterion(output.permute(1,0,2), target, output_size, target_size)

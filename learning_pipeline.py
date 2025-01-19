@@ -50,7 +50,7 @@ class AudioDataset(Dataset):
     """
     Dataset for audio and MIDI processing split into fixed 2-second segments.
     """
-    def __init__(self, audio_dir, midi_dir, hop_size, frame_size = 2, transform=None, new_sr=None):
+    def __init__(self, audio_dir, midi_dir, hop_size, dataset_size = 50, frame_size = 2, transform=None, new_sr=None):
         self.audio_dir = audio_dir
         self.midi_dir = midi_dir
         self.new_sr = new_sr
@@ -67,6 +67,9 @@ class AudioDataset(Dataset):
         self.audio_files.sort()
         self.midi_files.sort()
         
+        self.audio_files = self.audio_files[:dataset_size]
+        self.midi_files = self.midi_files[:dataset_size]
+
         for audio_file, midi_file in zip(self.audio_files, self.midi_files):
             name_audio = os.path.splitext(audio_file)[0]
             name_midi = os.path.splitext(midi_file)[0]
@@ -371,7 +374,7 @@ if __name__ == "__main__":
     task = Task.init(project_name="Audio Aligment", task_name=args.taskname, reuse_last_task_id=args.clearml_reuse)
     transform = torchaudio.transforms.Spectrogram(n_fft = args.nfft)
 
-    dataset = AudioDataset(audio_dir=args.audio_dir, midi_dir = args.midi_dir, transform=transform, hop_size=args.nfft // 2)
+    dataset = AudioDataset(audio_dir=args.audio_dir, midi_dir = args.midi_dir, transform=transform, hop_size=args.nfft // 2, dataset_size=args.dataset_size)
     train_size = int(args.train_part * len(dataset))
     val_size = len(dataset) - train_size
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])

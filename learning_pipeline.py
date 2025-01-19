@@ -12,10 +12,10 @@ import numpy as np
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 import soundfile as sf #saving sound files
 from sklearn.metrics.pairwise import cosine_similarity
+import multiprocessing
 PITCHES = 128
-SAMPLE_RATE = 44100
 BLANK_CHAR = 0
-
+NUM_WORKERS = multiprocessing.cpu_count() // 2
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
@@ -24,9 +24,39 @@ class Error(Exception):
 
 def midi_processing(midi_data):
     data = []
+    chords = []
+    current_chord = []
     for instrument in midi_data.instruments:
-        for note in instrument.notes:
-            data.append([note.pitch + 1, note.start, note.end, note.velocity])
+        notes = sorted(instrument.notes, key=lambda x: x.start)
+        for note in notes:
+            if not current_chord:
+                current_chord.append(note)
+            else:
+                chord_start = current_chord[0].start
+                chord_end = current_chord[-1].end
+                if note.start <= chord_end:
+                    current_chord.append(note)
+                else:
+                    bass_note = min(current_chord, key=lambda x: x.pitch)
+                    chord_start = current_chord[0].start
+                    chord_end = current_chord[-1].end
+                    chords.append({
+                        'bass': bass_note.pitch + 1,
+                        'start_time': chord_start,
+                        'end_time': chord_end,
+                    })
+                    current_chord = [note]
+        if current_chord:
+            bass_note = min(current_chord, key=lambda x: x.pitch)
+            chord_start = current_chord[0].start
+            chord_end = current_chord[-1].end
+            chords.append({
+                'bass': bass_note.pitch + 1,
+                'start_time': chord_start,
+                'end_time': chord_end,
+            })
+    for chord in chords:
+        data.append([chord['bass'], chord['start_time'], chord['end_time']])
     return data
 
 def create_midi_template():
@@ -76,60 +106,80 @@ class AudioDataset(Dataset):
             if name_audio != name_midi:
                 raise ValueError(f"Mismatch: {name_audio}.midi and {name_midi}.* audio file")
 
-        self.segments = []
+        #self.segments = []
+        self.audio_segments = []
+        self.notes = []
         for audio_file, midi_file in zip(self.audio_files, self.midi_files):
             audio_path = os.path.join(self.audio_dir, audio_file)
             midi_path = os.path.join(self.midi_dir, midi_file)
-            self.segments.extend(self._generate_segments(audio_path, midi_path))
-
+            self._generate_segments(audio_path, midi_path)
     def _generate_segments(self, audio_path, midi_path):
         audio, sr = torchaudio.load(audio_path)
         audio = audio.mean(dim=0)
-
-        if self.transform:
-            audio = self.transform(audio)
-            if self.new_sr:
+        #print(audio.size())
+        if self.new_sr:
+                transform = torchaudio.transforms.Resample(sr, self.new_sr)
                 sr = self.new_sr
-
+        if self.transform:
+            for transform in self.transform:
+                audio = transform(audio)
+        #print(audio.size())
         midi_data = midi_processing(pretty_midi.PrettyMIDI(midi_path))
 
         segment_length = self.frame_size * (sr + self.hop_size - 1) // (self.hop_size)
         total_segments = (audio.size(1) + segment_length - 1) // segment_length
-        segments = []
-
+        audio_segments = torch.zeros((total_segments, audio.size(0), segment_length))
+        notes = []
         for i in range(total_segments):
             start = i * segment_length
             end = (i + 1) * segment_length
             audio_segment = audio[:,start:end]
             if (audio_segment.size(1) < segment_length):
                 audio_segment = torch.cat((audio_segment,torch.zeros(audio_segment.size(0), segment_length - audio_segment.size(1))), dim = 1)
-            notes = [data[0] for data in midi_data if  self.frame_size * i <= data[1] < self.frame_size * (i + 1)]
-            segments.append({
-                'audio': audio_segment,
-                'notes': notes,
-                'size': len(notes),
-                'sr': sr,
-            })
-        return segments
+            audio_segments[i] = audio_segment
+            notes.append([data[0] for data in midi_data if self.frame_size * i <= data[1] and data[2] <= self.frame_size * (i + 1)])
+
+            #notes = [data[0] for data in midi_data if  self.frame_size * i <= data[1] < self.frame_size * (i + 1)]
+            #segments.append({
+            #    'audio': audio_segment,
+            #    'size': len(notes),
+            #    'notes': notes,
+            #    'sr': sr,
+            #})
+        self.audio_segments.append(audio_segments)
+        self.notes.append(notes)
 
     def __len__(self):
-        return len(self.segments)
+        return sum(segment.size(0) for segment in self.audio_segments)
 
     def __getitem__(self, index):
-        return self.segments[index]
+        segment_idx = 0
+        while index >= self.audio_segments[segment_idx].size(0):
+            index-=self.audio_segments[segment_idx].size(0)
+            segment_idx+=1
+        
+        audio_segment = self.audio_segments[segment_idx][index]
+        notes = self.notes[segment_idx][index]
+
+        return {
+            'audio': audio_segment,
+            'notes': notes,
+            'size': len(notes),
+            'sr': self.new_sr
+        }
 
 def collate_fn(batch):
     audio = [item['audio'] for item in batch]
     notes = [torch.tensor(item['notes'], dtype=torch.int32) for item in batch]
     size = [item['size'] for item in batch]
     sr = [item['sr'] for item in batch]
-    audio = torch.stack(audio).to(device)
-    notes = nn.utils.rnn.pad_sequence(notes, batch_first=True, padding_value=0).to(device)
+    audio = torch.stack(audio)
+    notes = nn.utils.rnn.pad_sequence(notes, batch_first=True, padding_value=0)
     return {
         'audio': audio,
         'notes': notes,
-        'size': torch.tensor(size, dtype=torch.int32, device=device),
-        'sr': torch.tensor(sr, dtype=torch.int32, device=device),
+        'size': torch.tensor(size, dtype=torch.int32),
+        'sr': torch.tensor(sr, dtype=torch.int32),
     }
 
 class PositionalEncoding(nn.Module):
@@ -335,6 +385,9 @@ def train_model(model, train_dataloader, val_dataloader, num_epochs, initial_lr,
             if save_checkpoint_path and iteration % save_step == 0:
                 save_checkpoint(model, optimizer, scheduler, epoch, iteration, save_checkpoint_path+f"model{iteration}.pth")
             audio, target, target_size = batch['audio'], batch['notes'], batch['size']
+            audio = audio.to(device)
+            target = target.to(device)
+            target_size = target_size.to(device)
             #print(audio.size())
             output = model(audio)
             #print(output.size())
@@ -372,9 +425,20 @@ if __name__ == "__main__":
     #print(midi_template.size())
 
     task = Task.init(project_name="Audio Aligment", task_name=args.taskname, reuse_last_task_id=args.clearml_reuse)
-    transform = torchaudio.transforms.Spectrogram(n_fft = args.nfft)
+    
+    transform = [
+        torchaudio.transforms.Spectrogram(n_fft=args.nfft)
+    ]
 
-    dataset = AudioDataset(audio_dir=args.audio_dir, midi_dir = args.midi_dir, transform=transform, hop_size=args.nfft // 2, dataset_size=args.dataset_size)
+    #transform = torchaudio.transforms.Spectrogram(n_fft = args.nfft)
+
+    dataset = AudioDataset(audio_dir=args.audio_dir, 
+                           midi_dir = args.midi_dir, 
+                           transform=transform, 
+                           hop_size=args.nfft // 2, 
+                           dataset_size=args.dataset_size,
+                           new_sr=args.sr)
+    
     train_size = int(args.train_part * len(dataset))
     val_size = len(dataset) - train_size
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
@@ -383,14 +447,16 @@ if __name__ == "__main__":
         train_dataset,
         batch_size=args.batch_size,
         collate_fn=collate_fn,
-        shuffle=True
+        shuffle=True,
+        num_workers=NUM_WORKERS
     )
-
+    print(len(train_dataloader))
     val_dataloader = DataLoader (
         val_dataset,
         batch_size=args.batch_size,
         collate_fn=collate_fn,
-        shuffle=True
+        shuffle=True,
+        num_workers=NUM_WORKERS
     )
 
     model = AudioAligmentModel(input_dim = args.nfft // 2 + 1, num_classes = 129)

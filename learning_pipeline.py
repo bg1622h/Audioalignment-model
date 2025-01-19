@@ -66,9 +66,6 @@ class AudioDataset(Dataset):
         self.audio_files.sort()
         self.midi_files.sort()
 
-        self.audio_files = self.audio_files[:4]
-        self.midi_files = self.midi_files[:4]
-
         for audio_file, midi_file in zip(self.audio_files, self.midi_files):
             name_audio = os.path.splitext(audio_file)[0]
             name_midi = os.path.splitext(midi_file)[0]

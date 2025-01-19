@@ -97,6 +97,8 @@ class AudioDataset(Dataset):
             start = i * segment_length
             end = (i + 1) * segment_length
             audio_segment = audio[:,start:end]
+            if (audio_segment.size(1) < segment_length):
+                audio_segment = torch.cat((audio_segment,torch.zeros(audio_segment.size(0), segment_length - audio_segment.size(1))), dim = 1)
             notes = [data[0] for data in midi_data if i <= data[1] < (i + 1)]
             segments.append({
                 'audio': audio_segment,

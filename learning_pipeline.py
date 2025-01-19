@@ -265,7 +265,7 @@ class ConformerBlock(nn.Module):
         return self.norm(x)
 
 class AudioAligmentModel(nn.Module):
-    def __init__(self, input_dim, num_classes, num_blocks = 2, d_model = 256, nhead = 2, ffn_expansion_factor = 4, 
+    def __init__(self, input_dim, num_classes, num_blocks = 4, d_model = 256, nhead = 2, ffn_expansion_factor = 4, 
                  kernel_size = 31, dropout = 0.1):
         super(AudioAligmentModel, self).__init__()
         self.d_model = d_model
@@ -406,6 +406,9 @@ def train_model(model, train_dataloader, val_dataloader, num_epochs, initial_lr,
         with torch.no_grad():
             for batch in val_dataloader:
                 audio, target, target_size = batch['audio'], batch['notes'], batch['size']
+                audio = audio.to(device)
+                target = target.to(device)
+                target_size = target_size.to(device)
                 output = model(audio)
                 output = output.log_softmax(2)
                 output_size = torch.tensor([out.size(0) for out in output], dtype=torch.int32, device=device)

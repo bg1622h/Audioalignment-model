@@ -16,4 +16,5 @@ def parse_args():
     parser.add_argument("--clearml_reuse", type = bool, default = True)
     parser.add_argument("--train_part", type = float, default=0.8)
     parser.add_argument("--dataset_size", type = int, default=50)
+    parser.add_argument("--path_save_model",type = str, default="./checkpoints/model150.pth")
     return parser.parse_args()

@@ -26,7 +26,7 @@ def beam_search_decoder(probs, beam_width=3):
                 new_score = score + probs[t, cur_char].item()
                 all_candidates.append(((new_seq, cur_char), new_score))
         sequences = sorted(all_candidates, key=lambda x: -x[1])[:beam_width]
-    return sequences
+    return sequences[0]
 
 def testing_aligment(model, dataloader):
     model.eval()
@@ -41,6 +41,7 @@ def testing_aligment(model, dataloader):
             print(loss.item())
             result = [beam_search_decoder(prob.cpu()) for prob in output]
             print(result)
+            print(target)
 
 if __name__ == "__main__":
     args = parse_args()
@@ -73,7 +74,7 @@ if __name__ == "__main__":
     model = AudioAligmentModel(input_dim = args.nfft // 2 + 1, num_classes = 129).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr = args.lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=optimizer, T_max=args.num_epochs)
-    load_checkpoint(model, optimizer, scheduler, "./checkpoints/model50.pth")
+    load_checkpoint(model, optimizer, scheduler, args.path_save_model)
 
     testing_aligment(model, val_dataloader)
 
